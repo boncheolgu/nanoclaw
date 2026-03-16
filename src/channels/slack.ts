@@ -136,9 +136,10 @@ export class SlackChannel implements Channel {
         }
       }
 
-      // Track the latest user message ts for threaded replies
+      // Track the thread root ts for threaded replies and assistant status.
+      // In assistant threads, thread_ts is set; for the first message, ts IS the root.
       if (!isBotMessage) {
-        this.lastUserTs.set(jid, msg.ts);
+        this.lastUserTs.set(jid, (msg as any).thread_ts || msg.ts);
       }
 
       this.opts.onMessage(jid, {
@@ -233,11 +234,20 @@ export class SlackChannel implements Channel {
     await this.app.stop();
   }
 
-  // Slack does not expose a typing indicator API for bots.
-  // This no-op satisfies the Channel interface so the orchestrator
-  // doesn't need channel-specific branching.
-  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
-    // no-op: Slack Bot API has no typing indicator endpoint
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+    const channelId = jid.replace(/^slack:/, '');
+    const threadTs = this.lastUserTs.get(jid);
+    if (!threadTs) return;
+
+    try {
+      await this.app.client.assistant.threads.setStatus({
+        channel_id: channelId,
+        thread_ts: threadTs,
+        status: isTyping ? 'is thinking...' : '',
+      });
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to set Slack assistant status');
+    }
   }
 
   /**
