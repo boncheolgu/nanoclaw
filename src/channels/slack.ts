@@ -107,10 +107,7 @@ export class SlackChannel implements Channel {
           isMain: false,
         };
         this.opts.registerGroup(jid, newGroup);
-        logger.info(
-          { jid, chatName, folder },
-          'Auto-registered Slack chat',
-        );
+        logger.info({ jid, chatName, folder }, 'Auto-registered Slack chat');
       }
 
       const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
