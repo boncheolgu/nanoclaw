@@ -16,6 +16,7 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: (jid: string, group: RegisteredGroup) => void;
 }
 
 /**
@@ -56,7 +57,10 @@ export class TelegramChannel implements Channel {
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken, {
       client: {
-        baseFetchConfig: { agent: https.globalAgent, compress: true },
+        baseFetchConfig: {
+          agent: new https.Agent({ family: 4, keepAlive: true }),
+          compress: true,
+        },
       },
     });
 
@@ -138,14 +142,24 @@ export class TelegramChannel implements Channel {
         isGroup,
       );
 
-      // Only deliver full message for registered groups
-      const group = this.opts.registeredGroups()[chatJid];
+      // Auto-register unknown Telegram chats
+      let group = this.opts.registeredGroups()[chatJid];
       if (!group) {
-        logger.debug(
-          { chatJid, chatName },
-          'Message from unregistered Telegram chat',
+        const folder = `tg_${chatName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
+        const newGroup: RegisteredGroup = {
+          name: chatName,
+          folder,
+          trigger: `@${ASSISTANT_NAME}`,
+          added_at: timestamp,
+          requiresTrigger: false,
+          isMain: false,
+        };
+        this.opts.registerGroup(chatJid, newGroup);
+        group = newGroup;
+        logger.info(
+          { chatJid, chatName, folder },
+          'Auto-registered Telegram chat',
         );
-        return;
       }
 
       // Deliver message — startMessageLoop() will pick it up

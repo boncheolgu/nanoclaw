@@ -59,6 +59,7 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  jid: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -160,6 +161,16 @@ function buildVolumeMounts(
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
+    readonly: false,
+  });
+
+  // Shared memory directory per channel type (e.g. all tg: chats share memory)
+  const channelPrefix = jid.split(':')[0]; // 'tg', 'slack', etc.
+  const sharedMemoryDir = path.join(DATA_DIR, 'shared', `${channelPrefix}-memory`);
+  fs.mkdirSync(sharedMemoryDir, { recursive: true });
+  mounts.push({
+    hostPath: sharedMemoryDir,
+    containerPath: '/home/node/.claude/memory',
     readonly: false,
   });
 
@@ -275,7 +286,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.chatJid);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
