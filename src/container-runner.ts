@@ -164,15 +164,17 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Shared memory directory per channel type (e.g. all tg: chats share memory)
+  // Shared memory directory for Telegram chats (all tg: chats share memory)
   const channelPrefix = jid.split(':')[0]; // 'tg', 'slack', etc.
-  const sharedMemoryDir = path.join(DATA_DIR, 'shared', `${channelPrefix}-memory`);
-  fs.mkdirSync(sharedMemoryDir, { recursive: true });
-  mounts.push({
-    hostPath: sharedMemoryDir,
-    containerPath: '/home/node/.claude/memory',
-    readonly: false,
-  });
+  if (channelPrefix === 'tg') {
+    const sharedMemoryDir = path.join(DATA_DIR, 'shared', 'tg-memory');
+    fs.mkdirSync(sharedMemoryDir, { recursive: true });
+    mounts.push({
+      hostPath: sharedMemoryDir,
+      containerPath: '/home/node/.claude/memory',
+      readonly: false,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
