@@ -145,7 +145,11 @@ export class TelegramChannel implements Channel {
       // Auto-register unknown Telegram chats
       let group = this.opts.registeredGroups()[chatJid];
       if (!group) {
-        const folder = `tg_${chatName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
+        const chatIdNum = chatJid.replace(/^tg:/, '').replace(/^-/, '');
+        const folder = `tg_${chatName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_|_$/g, '')}_${chatIdNum}`;
         const newGroup: RegisteredGroup = {
           name: chatName,
           folder,

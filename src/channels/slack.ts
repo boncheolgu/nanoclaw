@@ -26,6 +26,7 @@ export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: (jid: string, group: RegisteredGroup) => void;
 }
 
 export class SlackChannel implements Channel {
@@ -91,9 +92,26 @@ export class SlackChannel implements Channel {
       // Always report metadata for group discovery
       this.opts.onChatMetadata(jid, timestamp, undefined, 'slack', isGroup);
 
-      // Only deliver full messages for registered groups
+      // Auto-register unknown Slack chats
       const groups = this.opts.registeredGroups();
-      if (!groups[jid]) return;
+      if (!groups[jid]) {
+        const channelId = msg.channel;
+        const chatName = isGroup ? `slack_${channelId}` : 'slack_dm';
+        const folder = `slack_${channelId}`;
+        const newGroup: RegisteredGroup = {
+          name: chatName,
+          folder,
+          trigger: `@${ASSISTANT_NAME}`,
+          added_at: timestamp,
+          requiresTrigger: false,
+          isMain: false,
+        };
+        this.opts.registerGroup(jid, newGroup);
+        logger.info(
+          { jid, chatName, folder },
+          'Auto-registered Slack chat',
+        );
+      }
 
       const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
@@ -177,7 +195,11 @@ export class SlackChannel implements Channel {
     try {
       // Reply in-thread when there's a recent user message to reply to
       const threadTs = this.lastUserTs.get(jid);
-      const baseOpts = { channel: channelId, text, ...(threadTs ? { thread_ts: threadTs } : {}) };
+      const baseOpts = {
+        channel: channelId,
+        text,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      };
 
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
