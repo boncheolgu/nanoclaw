@@ -26,9 +26,19 @@ export const PROXY_BIND_HOST =
 function detectProxyBindHost(): string {
   if (os.platform() === 'darwin') return '127.0.0.1';
 
-  // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
-  // Check /proc filesystem, not env vars — WSL_DISTRO_NAME isn't set under systemd.
-  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return '127.0.0.1';
+  // WSL: Docker Desktop uses VM routing (loopback works), but native Docker
+  // on WSL uses the docker0 bridge — detect which by checking for docker0.
+  // os.networkInterfaces() may not list docker0, so fall back to `ip addr`.
+  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) {
+    try {
+      const out = execSync('ip -4 addr show docker0 2>/dev/null').toString();
+      const match = out.match(/inet\s+([\d.]+)/);
+      if (match) return match[1];
+    } catch {
+      // docker0 not found — Docker Desktop or no Docker
+    }
+    return '127.0.0.1';
+  }
 
   // Bare-metal Linux: bind to the docker0 bridge IP instead of 0.0.0.0
   const ifaces = os.networkInterfaces();
