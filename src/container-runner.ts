@@ -12,6 +12,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  GOOGLE_PROXY_PORT,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -26,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { issueProxyToken, revokeProxyToken } from './google-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
@@ -239,6 +241,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  groupFolder: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -262,16 +265,19 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass integration tokens to container for MCP servers
-  // Note: NOTION_API_TOKEN is no longer passed here — each group stores
-  // its own Notion credentials via /connect-notion (per-group file).
-  const integrationEnv = readEnvFile([
-    'GOOGLE_CLIENT_ID',
-    'GOOGLE_CLIENT_SECRET',
-  ]);
+  // Pass Google client ID (needed for auth URL generation in container)
+  // GOOGLE_CLIENT_SECRET is NOT passed — the host-side Google proxy handles
+  // all operations that require it, so containers never see the secret.
+  const integrationEnv = readEnvFile(['GOOGLE_CLIENT_ID']);
   for (const [key, value] of Object.entries(integrationEnv)) {
     args.push('-e', `${key}=${value}`);
   }
+
+  // Google proxy: containers route gws commands through this.
+  args.push(
+    '-e',
+    `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -313,7 +319,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain, input.chatJid);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const proxyToken = issueProxyToken(group.folder);
+  const containerArgs = [
+    ...buildContainerArgs(mounts, containerName, group.folder),
+  ];
+  // Insert token env before the image name (last element)
+  containerArgs.splice(containerArgs.length - 1, 0, '-e', `GOOGLE_PROXY_TOKEN=${proxyToken}`);
 
   logger.debug(
     {
@@ -469,6 +480,7 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
+      revokeProxyToken(proxyToken);
       const duration = Date.now() - startTime;
 
       if (timedOut) {

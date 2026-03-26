@@ -377,11 +377,6 @@ async function runQuery(
     log('Using global Notion token (legacy)');
   }
 
-  // Check for per-group Google credentials (saved by /connect-google)
-  const gwsCredentialsPath = '/workspace/group/.gws-credentials.json';
-  const hasGoogleCredentials = fs.existsSync(gwsCredentialsPath);
-  if (hasGoogleCredentials) log('Google credentials found for this group');
-
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
@@ -520,12 +515,6 @@ async function main(): Promise<void> {
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
-
-  // Point gws CLI to per-group Google credentials (if connected)
-  const gwsCredFile = '/workspace/group/.gws-credentials.json';
-  if (fs.existsSync(gwsCredFile)) {
-    sdkEnv.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE = gwsCredFile;
-  }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');

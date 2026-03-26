@@ -80,26 +80,28 @@ Append with date header, don't overwrite:
 
 You do NOT have direct access to Slack, Telegram, or any channel API. You cannot call Slack API or read channel history directly. All conversation messages are provided to you in the prompt — use them as-is. If asked to summarize or organize past conversations, work with the messages already in your context.
 
-## Google Workspace (gws CLI)
+## Google Workspace
 
-Google Workspace는 `gws` CLI 도구로 사용한다. MCP 도구가 아니라 Bash에서 직접 실행한다.
+Google Workspace는 `google_run` MCP 도구로 사용한다. Bash에서 gws를 직접 실행하지 않는다.
 
-### 주요 명령어
+### 사용법
+
+`google_run` 도구에 gws 명령어를 전달한다:
 
 Gmail:
-- `gws gmail +triage` — 안 읽은 메일 요약 (--format json, --max N, --query 'from:boss')
-- `gws gmail +read --id MSG_ID` — 메일 읽기 (--format json)
-- `gws gmail +send --to user@example.com --subject '제목' --body '본문'` — 메일 보내기 (--cc, --bcc, --attach, --draft)
-- `gws gmail +reply --message-id MSG_ID --body '답장'` — 답장
-- `gws gmail +forward --message-id MSG_ID --to user@example.com` — 전달
+- `gmail +triage` — 안 읽은 메일 요약 (--format json, --max N, --query 'from:boss')
+- `gmail +read --id MSG_ID` — 메일 읽기 (--format json)
+- `gmail +send --to user@example.com --subject '제목' --body '본문'` — 메일 보내기 (--cc, --bcc, --attach, --draft)
+- `gmail +reply --message-id MSG_ID --body '답장'` — 답장
+- `gmail +forward --message-id MSG_ID --to user@example.com` — 전달
 
 Calendar:
-- `gws calendar +agenda` — 다가오는 일정 (--today, --tomorrow, --week, --days N)
-- `gws calendar +insert --summary '미팅' --start '2026-03-27T10:00:00+09:00' --end '2026-03-27T11:00:00+09:00'` — 일정 생성 (--attendee, --meet, --location)
+- `calendar +agenda` — 다가오는 일정 (--today, --tomorrow, --week, --days N)
+- `calendar +insert --summary '미팅' --start '2026-03-27T10:00:00+09:00' --end '2026-03-27T11:00:00+09:00'` — 일정 생성 (--attendee, --meet, --location)
 
 Drive:
-- `gws drive files list --params '{"pageSize":10}'` — 파일 목록
-- `gws drive files list --params '{"q":"name contains '\''검색어'\''"}' ` — 파일 검색
+- `drive files list --params '{"pageSize":10}'` — 파일 목록
+- `drive files list --params '{"q":"name contains '\''검색어'\''"}' ` — 파일 검색
 
 ### 규칙
 
