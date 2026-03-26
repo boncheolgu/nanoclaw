@@ -324,7 +324,12 @@ export async function runContainerAgent(
     ...buildContainerArgs(mounts, containerName, group.folder),
   ];
   // Insert token env before the image name (last element)
-  containerArgs.splice(containerArgs.length - 1, 0, '-e', `GOOGLE_PROXY_TOKEN=${proxyToken}`);
+  containerArgs.splice(
+    containerArgs.length - 1,
+    0,
+    '-e',
+    `GOOGLE_PROXY_TOKEN=${proxyToken}`,
+  );
 
   logger.debug(
     {
