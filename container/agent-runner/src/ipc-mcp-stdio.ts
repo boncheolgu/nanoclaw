@@ -333,6 +333,195 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Notion tools ---
+// Always available so any group can connect their own Notion workspace.
+
+const NOTION_CREDENTIALS_PATH = '/workspace/group/.notion-credentials.json';
+
+server.tool(
+  'notion_connect',
+  'Connect a Notion workspace. Validates the token and saves credentials for this group.',
+  { token: z.string().describe('Notion Internal Integration Token (starts with ntn_ or secret_)') },
+  async (args) => {
+    try {
+      const res = await fetch('https://api.notion.com/v1/users/me', {
+        headers: {
+          Authorization: `Bearer ${args.token}`,
+          'Notion-Version': '2022-06-28',
+        },
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        return { content: [{ type: 'text' as const, text: `Invalid token: ${err}` }], isError: true };
+      }
+      const user = await res.json() as { name?: string; type?: string };
+      fs.writeFileSync(NOTION_CREDENTIALS_PATH, JSON.stringify({ token: args.token }, null, 2));
+      return { content: [{ type: 'text' as const, text: `Notion connected as ${user.name || 'unknown'} (${user.type || 'bot'}). Notion tools will be available on next message.` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'notion_status',
+  'Check if Notion is connected for this group.',
+  {},
+  async () => {
+    const connected = fs.existsSync(NOTION_CREDENTIALS_PATH);
+    return { content: [{ type: 'text' as const, text: connected ? 'Connected.' : 'Not connected. Use /connect-notion to set up.' }] };
+  },
+);
+
+server.tool(
+  'notion_disconnect',
+  'Disconnect Notion. Deletes saved credentials for this group.',
+  {},
+  async () => {
+    try { fs.unlinkSync(NOTION_CREDENTIALS_PATH); } catch {}
+    return { content: [{ type: 'text' as const, text: 'Notion disconnected.' }] };
+  },
+);
+
+// --- Google tools ---
+// All Google operations go through the host-side Google proxy.
+// Containers never see client_secret or refresh_token.
+
+const GOOGLE_PROXY_URL = process.env.GOOGLE_PROXY_URL;
+const GOOGLE_PROXY_TOKEN = process.env.GOOGLE_PROXY_TOKEN;
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/drive',
+].join(' ');
+
+if (process.env.GOOGLE_CLIENT_ID || GOOGLE_PROXY_URL) {
+  server.tool(
+    'google_auth_url',
+    'Generate a Google OAuth authorization URL. Send this to the user so they can log in.',
+    {},
+    async () => {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      if (!clientId) {
+        return { content: [{ type: 'text' as const, text: 'Error: GOOGLE_CLIENT_ID is not configured.' }], isError: true };
+      }
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: 'http://localhost:1',
+        response_type: 'code',
+        scope: GOOGLE_SCOPES,
+        access_type: 'offline',
+        prompt: 'consent',
+      });
+      return { content: [{ type: 'text' as const, text: `https://accounts.google.com/o/oauth2/v2/auth?${params}` }] };
+    },
+  );
+
+  server.tool(
+    'google_auth_exchange',
+    'Exchange an authorization code for tokens. The code comes from the redirect URL the user copies after Google login.',
+    { code: z.string().describe('The authorization code from the redirect URL (?code= parameter)') },
+    async (args) => {
+      if (!GOOGLE_PROXY_URL) {
+        return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }], isError: true };
+      }
+      try {
+        const res = await fetch(`${GOOGLE_PROXY_URL}/auth/exchange`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: args.code, groupFolder, token: GOOGLE_PROXY_TOKEN }),
+        });
+        const data = await res.json() as { error?: string };
+        if (!res.ok) {
+          return { content: [{ type: 'text' as const, text: `Error: ${data.error}` }], isError: true };
+        }
+        return { content: [{ type: 'text' as const, text: 'Google account connected successfully.' }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'google_auth_status',
+    'Check if Google account is connected for this chat.',
+    {},
+    async () => {
+      if (!GOOGLE_PROXY_URL) {
+        return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }] };
+      }
+      try {
+        const res = await fetch(`${GOOGLE_PROXY_URL}/auth/status?groupFolder=${encodeURIComponent(groupFolder)}&token=${encodeURIComponent(GOOGLE_PROXY_TOKEN || '')}`);
+        const data = await res.json() as { connected: boolean };
+        return { content: [{ type: 'text' as const, text: data.connected ? 'Connected.' : 'Not connected. Use /connect-google to authenticate.' }] };
+      } catch {
+        return { content: [{ type: 'text' as const, text: 'Not connected.' }] };
+      }
+    },
+  );
+
+  server.tool(
+    'google_disconnect',
+    'Disconnect Google account. Revokes the token at Google and deletes credentials.',
+    {},
+    async () => {
+      if (!GOOGLE_PROXY_URL) {
+        return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }] };
+      }
+      try {
+        const res = await fetch(`${GOOGLE_PROXY_URL}/auth/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupFolder, token: GOOGLE_PROXY_TOKEN }),
+        });
+        const data = await res.json() as { revokeResult?: string };
+        return { content: [{ type: 'text' as const, text: `Google account disconnected.${data.revokeResult || ''}` }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'google_run',
+    `Run a Google Workspace CLI (gws) command. Use this instead of running gws directly in Bash.
+
+Examples:
+  ["gmail", "+triage"]
+  ["gmail", "+read", "--id", "MSG_ID"]
+  ["gmail", "+send", "--to", "user@example.com", "--subject", "Subject", "--body", "Body"]
+  ["calendar", "+agenda", "--today"]
+  ["calendar", "+insert", "--summary", "Meeting", "--start", "2026-03-27T10:00:00+09:00", "--end", "2026-03-27T11:00:00+09:00"]
+  ["drive", "files", "list", "--params", "{\"pageSize\":10}"]`,
+    { argv: z.array(z.string()).min(1).describe('The gws command as an array of arguments (e.g., ["gmail", "+triage"])') },
+    async (args) => {
+      if (!GOOGLE_PROXY_URL) {
+        return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }], isError: true };
+      }
+      try {
+        const res = await fetch(`${GOOGLE_PROXY_URL}/gws`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ argv: args.argv, groupFolder, token: GOOGLE_PROXY_TOKEN }),
+        });
+        const data = await res.json() as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
+        if (data.error) {
+          return { content: [{ type: 'text' as const, text: data.error }], isError: true };
+        }
+        let output = '';
+        if (data.stdout) output += data.stdout;
+        if (data.stderr) output += (output ? '\n' : '') + data.stderr;
+        if (data.exitCode !== 0) {
+          return { content: [{ type: 'text' as const, text: output || `Command failed with exit code ${data.exitCode}` }], isError: true };
+        }
+        return { content: [{ type: 'text' as const, text: output || '(no output)' }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err}` }], isError: true };
+      }
+    },
+  );
+}
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

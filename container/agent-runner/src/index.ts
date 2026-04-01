@@ -361,6 +361,22 @@ async function runQuery(
   };
   setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
 
+  // Check for per-group Notion credentials (saved by /connect-notion)
+  const notionCredentialsPath = '/workspace/group/.notion-credentials.json';
+  let notionApiToken: string | null = null;
+  if (fs.existsSync(notionCredentialsPath)) {
+    try {
+      const creds = JSON.parse(fs.readFileSync(notionCredentialsPath, 'utf-8'));
+      notionApiToken = creds.token;
+      log('Notion credentials found for this group');
+    } catch { log('Failed to read Notion credentials'); }
+  }
+  // Legacy fallback: global env var
+  if (!notionApiToken && process.env.NOTION_API_TOKEN) {
+    notionApiToken = process.env.NOTION_API_TOKEN;
+    log('Using global Notion token (legacy)');
+  }
+
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
@@ -407,7 +423,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        ...(notionApiToken ? ['mcp__notion__*'] : []),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +440,20 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(notionApiToken ? {
+          notion: {
+            command: 'npx',
+            args: ['-y', '@notionhq/notion-mcp-server'],
+            env: {
+              OPENAPI_MCP_HEADERS: JSON.stringify({
+                Authorization: `Bearer ${notionApiToken}`,
+                'Notion-Version': '2022-06-28',
+              }),
+            },
+          },
+        } : {}),
+        // Google: gws CLI is available via Bash (no MCP server needed).
+        // Agent runs gws commands directly (e.g., gws gmail +triage).
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
