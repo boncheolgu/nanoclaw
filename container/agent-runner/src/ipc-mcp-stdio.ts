@@ -487,13 +487,13 @@ if (process.env.GOOGLE_CLIENT_ID || GOOGLE_PROXY_URL) {
     `Run a Google Workspace CLI (gws) command. Use this instead of running gws directly in Bash.
 
 Examples:
-  gmail +triage
-  gmail +read --id MSG_ID
-  gmail +send --to user@example.com --subject 'Subject' --body 'Body'
-  calendar +agenda --today
-  calendar +insert --summary 'Meeting' --start '2026-03-27T10:00:00+09:00' --end '2026-03-27T11:00:00+09:00'
-  drive files list --params '{"pageSize":10}'`,
-    { command: z.string().describe('The gws command (e.g., "gmail +triage", "calendar +agenda --today")') },
+  ["gmail", "+triage"]
+  ["gmail", "+read", "--id", "MSG_ID"]
+  ["gmail", "+send", "--to", "user@example.com", "--subject", "Subject", "--body", "Body"]
+  ["calendar", "+agenda", "--today"]
+  ["calendar", "+insert", "--summary", "Meeting", "--start", "2026-03-27T10:00:00+09:00", "--end", "2026-03-27T11:00:00+09:00"]
+  ["drive", "files", "list", "--params", "{\"pageSize\":10}"]`,
+    { argv: z.array(z.string()).min(1).describe('The gws command as an array of arguments (e.g., ["gmail", "+triage"])') },
     async (args) => {
       if (!GOOGLE_PROXY_URL) {
         return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }], isError: true };
@@ -502,7 +502,7 @@ Examples:
         const res = await fetch(`${GOOGLE_PROXY_URL}/gws`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: args.command, groupFolder, token: GOOGLE_PROXY_TOKEN }),
+          body: JSON.stringify({ argv: args.argv, groupFolder, token: GOOGLE_PROXY_TOKEN }),
         });
         const data = await res.json() as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
         if (data.error) {

@@ -10,7 +10,7 @@
  *   GET  /auth/status    - Check if credentials exist for a group
  */
 import crypto from 'crypto';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { createServer, Server } from 'http';
 import fs from 'fs';
 import os from 'os';
@@ -24,6 +24,20 @@ import { logger } from './logger.js';
 const CREDENTIALS_DIR = path.join(DATA_DIR, 'gws-credentials');
 const GWS_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'gws');
 const GWS_TIMEOUT = 60_000;
+
+// Allowed top-level gws subcommands
+const GWS_ALLOWED_SUBCOMMANDS = new Set([
+  'gmail',
+  'calendar',
+  'drive',
+  'contacts',
+  'people',
+  'sheets',
+  'docs',
+  'slides',
+  'tasks',
+  'admin',
+]);
 
 // Per-container token map: token → groupFolder
 // Tokens are issued when containers start and removed when they stop.
@@ -75,9 +89,6 @@ export function startGoogleProxy(
   const secrets = readEnvFile(['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']);
   fs.mkdirSync(CREDENTIALS_DIR, { recursive: true });
 
-  // Migrate existing credentials from groups/{name}/ to data/gws-credentials/
-  migrateCredentials();
-
   return new Promise((resolve, reject) => {
     const server = createServer(async (req, res) => {
       try {
@@ -117,10 +128,21 @@ async function handleGws(
   res: import('http').ServerResponse,
 ): Promise<void> {
   const body = JSON.parse(await readBody(req));
-  const { command, groupFolder, token } = body;
+  const { argv, groupFolder, token } = body;
 
-  if (!command || !groupFolder) {
-    jsonResponse(res, 400, { error: 'Missing command or groupFolder' });
+  if (
+    !Array.isArray(argv) ||
+    argv.length === 0 ||
+    !argv.every((a: unknown) => typeof a === 'string')
+  ) {
+    jsonResponse(res, 400, {
+      error: 'Missing or invalid argv (must be a non-empty string array)',
+    });
+    return;
+  }
+
+  if (!groupFolder) {
+    jsonResponse(res, 400, { error: 'Missing groupFolder' });
     return;
   }
 
@@ -137,6 +159,15 @@ async function handleGws(
 
   if (!isValidGroupFolder(groupFolder)) {
     jsonResponse(res, 400, { error: 'Invalid groupFolder' });
+    return;
+  }
+
+  // Validate top-level subcommand
+  const subcommand = argv[0].toLowerCase();
+  if (!GWS_ALLOWED_SUBCOMMANDS.has(subcommand)) {
+    jsonResponse(res, 400, {
+      error: `Disallowed gws subcommand: ${subcommand}`,
+    });
     return;
   }
 
@@ -161,8 +192,9 @@ async function handleGws(
       stderr: string;
       exitCode: number;
     }>((resolve) => {
-      exec(
-        `${GWS_BIN} ${command}`,
+      execFile(
+        GWS_BIN,
+        argv,
         {
           timeout: GWS_TIMEOUT,
           env: {
@@ -170,6 +202,7 @@ async function handleGws(
             GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: tmpFile,
           },
           maxBuffer: 10 * 1024 * 1024,
+          shell: false,
         },
         (err, stdout, stderr) => {
           resolve({
@@ -347,28 +380,3 @@ function handleAuthStatus(
   jsonResponse(res, 200, { connected });
 }
 
-/**
- * Migrate credentials from groups/{name}/.gws-credentials.json
- * to data/gws-credentials/{name}.json (host-only location).
- */
-function migrateCredentials(): void {
-  const groupsDir = path.join(process.cwd(), 'groups');
-  if (!fs.existsSync(groupsDir)) return;
-
-  for (const folder of fs.readdirSync(groupsDir)) {
-    const oldPath = path.join(groupsDir, folder, '.gws-credentials.json');
-    const newPath = getCredentialsPath(folder);
-
-    if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
-      try {
-        fs.copyFileSync(oldPath, newPath);
-        logger.info(
-          { folder },
-          'Migrated Google credentials to host-only location',
-        );
-      } catch (err) {
-        logger.warn({ folder, err }, 'Failed to migrate Google credentials');
-      }
-    }
-  }
-}
