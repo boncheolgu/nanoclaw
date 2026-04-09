@@ -361,20 +361,26 @@ async function runQuery(
   };
   setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
 
-  // Check for per-group Notion credentials (saved by /connect-notion)
-  const notionCredentialsPath = '/workspace/group/.notion-credentials.json';
-  let notionApiToken: string | null = null;
-  if (fs.existsSync(notionCredentialsPath)) {
+  // Check if Notion is connected for this group via the host proxy.
+  // The proxy stores credentials outside the container-mounted path.
+  const notionMcpUrl = process.env.NOTION_MCP_URL;
+  const notionMcpToken = process.env.NOTION_MCP_TOKEN;
+  let notionConnected = false;
+  if (notionMcpUrl && notionMcpToken) {
     try {
-      const creds = JSON.parse(fs.readFileSync(notionCredentialsPath, 'utf-8'));
-      notionApiToken = creds.token;
-      log('Notion credentials found for this group');
-    } catch { log('Failed to read Notion credentials'); }
-  }
-  // Legacy fallback: global env var
-  if (!notionApiToken && process.env.NOTION_API_TOKEN) {
-    notionApiToken = process.env.NOTION_API_TOKEN;
-    log('Using global Notion token (legacy)');
+      const params = new URLSearchParams({
+        groupFolder: containerInput.groupFolder,
+        token: notionMcpToken,
+      });
+      const statusRes = await fetch(`${notionMcpUrl}/notion/status?${params}`);
+      if (statusRes.ok) {
+        const data = await statusRes.json() as { connected: boolean };
+        notionConnected = data.connected;
+        if (notionConnected) log('Notion connected for this group');
+      }
+    } catch {
+      log('Failed to check Notion status via proxy');
+    }
   }
 
   let newSessionId: string | undefined;
@@ -424,7 +430,7 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        ...(notionApiToken ? ['mcp__notion__*'] : []),
+        ...(notionConnected ? ['mcp__notion__*'] : []),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -440,15 +446,14 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        ...(notionApiToken ? {
+        ...(notionConnected && notionMcpUrl && notionMcpToken ? {
           notion: {
-            command: 'npx',
-            args: ['-y', '@notionhq/notion-mcp-server'],
+            command: 'node',
+            args: ['/notion-mcp-wrapper.js'],
             env: {
-              OPENAPI_MCP_HEADERS: JSON.stringify({
-                Authorization: `Bearer ${notionApiToken}`,
-                'Notion-Version': '2022-06-28',
-              }),
+              NOTION_MCP_URL: notionMcpUrl,
+              NOTION_MCP_TOKEN: notionMcpToken,
+              GROUP_FOLDER: containerInput.groupFolder,
             },
           },
         } : {}),

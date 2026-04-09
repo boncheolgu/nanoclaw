@@ -46,12 +46,20 @@ npm run build        # Compile TypeScript
 
 Service management:
 ```bash
-# macOS (launchd)
+# pm2 (권장 — 크로스 플랫폼, 로그/모니터링 편의)
+pm2 start dist/index.js --name nanoclaw
+pm2 stop nanoclaw
+pm2 restart nanoclaw
+pm2 logs nanoclaw        # 실시간 로그
+pm2 monit                # CPU/메모리 모니터링
+pm2 startup && pm2 save  # 재부팅 후 자동 시작 설정 (최초 1회)
+
+# macOS (launchd) — 시스템 서비스로 등록하는 경우
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
 
-# Linux (systemd)
+# Linux (systemd) — 시스템 서비스로 등록하는 경우
 systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw

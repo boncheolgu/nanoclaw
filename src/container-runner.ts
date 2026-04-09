@@ -15,6 +15,7 @@ import {
   GOOGLE_PROXY_PORT,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  NOTION_MCP_PORT,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -27,10 +28,16 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
-import { issueProxyToken, revokeProxyToken } from './google-proxy.js';
+import { issueProxyToken, revokeProxyToken } from './proxy-server.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
+
+// Set once at startup by index.ts. null = Google not configured.
+let googleClientId: string | null = null;
+
+export function setGoogleConfigured(clientId: string | null): void {
+  googleClientId = clientId;
+}
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -59,6 +66,109 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+/**
+ * Ensures all host-side directories and files exist before a container starts.
+ * Separated from buildVolumeMounts so that function only constructs the mount list.
+ */
+function ensureGroupDefaults(
+  group: RegisteredGroup,
+  isMain: boolean,
+  jid: string,
+): void {
+  const projectRoot = process.cwd();
+  const groupDir = resolveGroupFolderPath(group.folder);
+
+  // Ensure group directory exists
+  fs.mkdirSync(groupDir, { recursive: true });
+
+  // Ensure group has a CLAUDE.md — copy template if missing
+  const groupClaudeMd = path.join(groupDir, 'CLAUDE.md');
+  if (!isMain && !fs.existsSync(groupClaudeMd)) {
+    const templatePath = path.join(GROUPS_DIR, 'global', 'CLAUDE.md');
+    if (fs.existsSync(templatePath)) {
+      fs.copyFileSync(templatePath, groupClaudeMd);
+    }
+  }
+
+  // Per-group Claude sessions directory (isolated from other groups)
+  // Each group gets their own .claude/ to prevent cross-group session access
+  const groupSessionsDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    '.claude',
+  );
+  fs.mkdirSync(groupSessionsDir, { recursive: true });
+  const settingsFile = path.join(groupSessionsDir, 'settings.json');
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify(
+        {
+          env: {
+            // Enable agent swarms (subagent orchestration)
+            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+            // Load CLAUDE.md from additional mounted directories
+            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+            // Enable Claude's memory feature (persists user preferences between sessions)
+            // https://code.claude.com/docs/en/memory#manage-auto-memory
+            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  }
+
+  // Sync skills from container/skills/ into each group's .claude/skills/
+  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const skillsDst = path.join(groupSessionsDir, 'skills');
+  if (fs.existsSync(skillsSrc)) {
+    for (const skillDir of fs.readdirSync(skillsSrc)) {
+      const srcDir = path.join(skillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+
+  // Shared memory directory for Telegram chats (all tg: chats share memory)
+  const channelPrefix = jid.split(':')[0]; // 'tg', 'slack', etc.
+  if (channelPrefix === 'tg') {
+    const sharedMemoryDir = path.join(DATA_DIR, 'shared', 'tg-memory');
+    fs.mkdirSync(sharedMemoryDir, { recursive: true });
+  }
+
+  // Per-group IPC namespace: each group gets its own IPC directory
+  // This prevents cross-group privilege escalation via IPC
+  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+
+  // Copy agent-runner source into a per-group writable location so agents
+  // can customize it (add tools, change behavior) without affecting other
+  // groups. Recompiled on container startup via entrypoint.sh.
+  const agentRunnerSrc = path.join(
+    projectRoot,
+    'container',
+    'agent-runner',
+    'src',
+  );
+  const groupAgentRunnerDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'agent-runner-src',
+  );
+  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
+    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  }
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
@@ -67,16 +177,6 @@ function buildVolumeMounts(
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
-
-  // Ensure group has a CLAUDE.md — copy template if missing
-  fs.mkdirSync(groupDir, { recursive: true });
-  const groupClaudeMd = path.join(groupDir, 'CLAUDE.md');
-  if (!isMain && !fs.existsSync(groupClaudeMd)) {
-    const templatePath = path.join(GROUPS_DIR, 'global', 'CLAUDE.md');
-    if (fs.existsSync(templatePath)) {
-      fs.copyFileSync(templatePath, groupClaudeMd);
-    }
-  }
 
   if (isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
@@ -127,50 +227,12 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
   const groupSessionsDir = path.join(
     DATA_DIR,
     'sessions',
     group.folder,
     '.claude',
   );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
-
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -181,7 +243,6 @@ function buildVolumeMounts(
   const channelPrefix = jid.split(':')[0]; // 'tg', 'slack', etc.
   if (channelPrefix === 'tg') {
     const sharedMemoryDir = path.join(DATA_DIR, 'shared', 'tg-memory');
-    fs.mkdirSync(sharedMemoryDir, { recursive: true });
     mounts.push({
       hostPath: sharedMemoryDir,
       containerPath: '/home/node/.claude/memory',
@@ -192,38 +253,34 @@ function buildVolumeMounts(
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
   const groupAgentRunnerDir = path.join(
     DATA_DIR,
     'sessions',
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-  }
   mounts.push({
     hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
   });
+
+  // Mount notion-mcp-wrapper so the agent can use it as an MCP server command.
+  // Mounted read-only to prevent the container from modifying it.
+  const wrapperPath = path.join(projectRoot, 'container', 'notion-mcp-wrapper.js');
+  if (fs.existsSync(wrapperPath)) {
+    mounts.push({
+      hostPath: wrapperPath,
+      containerPath: '/notion-mcp-wrapper.js',
+      readonly: true,
+    });
+  }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
@@ -241,7 +298,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  groupFolder: string,
+  proxyToken: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -265,19 +322,17 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass Google client ID (needed for auth URL generation in container)
-  // GOOGLE_CLIENT_SECRET is NOT passed — the host-side Google proxy handles
-  // all operations that require it, so containers never see the secret.
-  const integrationEnv = readEnvFile(['GOOGLE_CLIENT_ID']);
-  for (const [key, value] of Object.entries(integrationEnv)) {
-    args.push('-e', `${key}=${value}`);
+  // Google: only inject when configured. GOOGLE_CLIENT_SECRET is NOT passed —
+  // the host-side Google proxy handles all operations that require it.
+  if (googleClientId) {
+    args.push('-e', `GOOGLE_CLIENT_ID=${googleClientId}`);
+    args.push('-e', `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`);
+    args.push('-e', `GOOGLE_PROXY_TOKEN=${proxyToken}`);
   }
 
-  // Google proxy: containers route gws commands through this.
-  args.push(
-    '-e',
-    `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`,
-  );
+  // Notion MCP proxy: always available, credentials stored on host.
+  args.push('-e', `NOTION_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${NOTION_MCP_PORT}`);
+  args.push('-e', `NOTION_MCP_TOKEN=${proxyToken}`);
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -313,23 +368,13 @@ export async function runContainerAgent(
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
+  ensureGroupDefaults(group, input.isMain, input.chatJid);
   const groupDir = resolveGroupFolderPath(group.folder);
-  fs.mkdirSync(groupDir, { recursive: true });
-
   const mounts = buildVolumeMounts(group, input.isMain, input.chatJid);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const proxyToken = issueProxyToken(group.folder);
-  const containerArgs = [
-    ...buildContainerArgs(mounts, containerName, group.folder),
-  ];
-  // Insert token env before the image name (last element)
-  containerArgs.splice(
-    containerArgs.length - 1,
-    0,
-    '-e',
-    `GOOGLE_PROXY_TOKEN=${proxyToken}`,
-  );
+  const containerArgs = buildContainerArgs(mounts, containerName, proxyToken);
 
   logger.debug(
     {
@@ -375,7 +420,17 @@ export async function runContainerAgent(
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
     let newSessionId: string | undefined;
-    let outputChain = Promise.resolve();
+    const outputQueue: ContainerOutput[] = [];
+    let outputProcessing = false;
+
+    async function processOutputQueue() {
+      if (outputProcessing) return;
+      outputProcessing = true;
+      while (outputQueue.length > 0) {
+        await onOutput!(outputQueue.shift()!);
+      }
+      outputProcessing = false;
+    }
 
     container.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -418,7 +473,10 @@ export async function runContainerAgent(
             resetTimeout();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
+            outputQueue.push(parsed);
+            processOutputQueue().catch((err) => {
+              logger.warn({ group: group.name, error: err }, 'Output queue processing error');
+            });
           } catch (err) {
             logger.warn(
               { group: group.name, error: err },
@@ -512,7 +570,7 @@ export async function runContainerAgent(
             { group: group.name, containerName, duration, code },
             'Container timed out after output (idle cleanup)',
           );
-          outputChain.then(() => {
+          processOutputQueue().then(() => {
             resolve({
               status: 'success',
               result: null,
@@ -614,9 +672,9 @@ export async function runContainerAgent(
         return;
       }
 
-      // Streaming mode: wait for output chain to settle, return completion marker
+      // Streaming mode: wait for output queue to drain, return completion marker
       if (onOutput) {
-        outputChain.then(() => {
+        processOutputQueue().then(() => {
           logger.info(
             { group: group.name, duration, newSessionId },
             'Container completed (streaming mode)',

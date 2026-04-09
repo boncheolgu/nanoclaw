@@ -9,8 +9,11 @@
  *   POST /auth/disconnect - Revoke token and delete credentials
  *   GET  /auth/status    - Check if credentials exist for a group
  */
-import crypto from 'crypto';
 import { execFile } from 'child_process';
+import { promisify } from 'util';
+import crypto from 'crypto';
+
+const execFileAsync = promisify(execFile);
 import { createServer, Server } from 'http';
 import fs from 'fs';
 import os from 'os';
@@ -20,6 +23,7 @@ import { DATA_DIR } from './config.js';
 import { readEnvFile } from './env.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { validateToken, readBody, jsonResponse } from './proxy-server.js';
 
 const CREDENTIALS_DIR = path.join(DATA_DIR, 'gws-credentials');
 const GWS_BIN = path.join(process.cwd(), 'node_modules', '.bin', 'gws');
@@ -39,47 +43,8 @@ const GWS_ALLOWED_SUBCOMMANDS = new Set([
   'admin',
 ]);
 
-// Per-container token map: token → groupFolder
-// Tokens are issued when containers start and removed when they stop.
-const tokenMap = new Map<string, string>();
-
-/** Issue a token for a container. Called from container-runner. */
-export function issueProxyToken(groupFolder: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
-  tokenMap.set(token, groupFolder);
-  return token;
-}
-
-/** Revoke a token when a container stops. */
-export function revokeProxyToken(token: string): void {
-  tokenMap.delete(token);
-}
-
-/** Validate token and return the groupFolder it's bound to, or null. */
-function validateToken(token: string | undefined): string | null {
-  if (!token) return null;
-  return tokenMap.get(token) ?? null;
-}
-
 function getCredentialsPath(groupFolder: string): string {
   return path.join(CREDENTIALS_DIR, `${groupFolder}.json`);
-}
-
-function readBody(req: import('http').IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
-  });
-}
-
-function jsonResponse(
-  res: import('http').ServerResponse,
-  status: number,
-  data: unknown,
-): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
 }
 
 export function startGoogleProxy(
@@ -99,10 +64,10 @@ export function startGoogleProxy(
         } else if (req.method === 'POST' && req.url === '/auth/disconnect') {
           await handleAuthDisconnect(req, res);
         } else if (
-          req.method === 'GET' &&
-          req.url?.startsWith('/auth/status')
+          req.method === 'POST' &&
+          req.url === '/auth/status'
         ) {
-          handleAuthStatus(req, res);
+          await handleAuthStatus(req, res);
         } else {
           jsonResponse(res, 404, { error: 'Not found' });
         }
@@ -123,12 +88,47 @@ export function startGoogleProxy(
   });
 }
 
+/**
+ * Common request validation for all POST handlers.
+ * Checks groupFolder presence, validity, and proxy token in that order.
+ * Returns groupFolder on success, null if a response has already been sent.
+ */
+function validateRequest(
+  body: { groupFolder?: string; token?: string },
+  res: import('http').ServerResponse,
+): string | null {
+  const { groupFolder, token } = body;
+
+  if (!groupFolder) {
+    jsonResponse(res, 400, { error: 'Missing groupFolder' });
+    return null;
+  }
+
+  if (!isValidGroupFolder(groupFolder)) {
+    jsonResponse(res, 400, { error: 'Invalid groupFolder' });
+    return null;
+  }
+
+  const tokenGroup = validateToken(token);
+  if (!tokenGroup || tokenGroup !== groupFolder) {
+    jsonResponse(res, 403, { error: 'Unauthorized' });
+    return null;
+  }
+
+  return groupFolder;
+}
+
 async function handleGws(
   req: import('http').IncomingMessage,
   res: import('http').ServerResponse,
 ): Promise<void> {
-  const body = JSON.parse(await readBody(req));
-  const { argv, groupFolder, token } = body;
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return jsonResponse(res, 400, { error: 'Invalid JSON' });
+  }
+  const { argv } = body;
 
   if (
     !Array.isArray(argv) ||
@@ -141,26 +141,8 @@ async function handleGws(
     return;
   }
 
-  if (!groupFolder) {
-    jsonResponse(res, 400, { error: 'Missing groupFolder' });
-    return;
-  }
-
-  // Token verification: ensure the request comes from the right container
-  const tokenGroup = validateToken(token);
-  if (!tokenGroup || tokenGroup !== groupFolder) {
-    logger.warn(
-      { groupFolder, tokenGroup },
-      'Google proxy: token mismatch, request rejected',
-    );
-    jsonResponse(res, 403, { error: 'Unauthorized' });
-    return;
-  }
-
-  if (!isValidGroupFolder(groupFolder)) {
-    jsonResponse(res, 400, { error: 'Invalid groupFolder' });
-    return;
-  }
+  const groupFolder = validateRequest(body, res);
+  if (!groupFolder) return;
 
   // Validate top-level subcommand
   const subcommand = argv[0].toLowerCase();
@@ -179,43 +161,44 @@ async function handleGws(
     return;
   }
 
-  // Write credentials to a temp file for this invocation
+  // Write credentials to a temp file for this invocation.
+  // crypto.randomBytes() instead of Math.random() — cryptographically secure,
+  // prevents filename prediction attacks (symlink race, temp file hijacking).
+  // 0o600 permission — owner read/write only, prevents other users/processes
+  // on the same host from reading the OAuth refresh token.
   const tmpFile = path.join(
     os.tmpdir(),
-    `gws-creds-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`,
+    `gws-creds-${crypto.randomBytes(8).toString('hex')}.json`,
   );
   fs.copyFileSync(credPath, tmpFile);
+  fs.chmodSync(tmpFile, 0o600);
 
   try {
-    const result = await new Promise<{
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-    }>((resolve) => {
-      execFile(
-        GWS_BIN,
-        argv,
-        {
-          timeout: GWS_TIMEOUT,
-          env: {
-            ...process.env,
-            GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: tmpFile,
-          },
-          maxBuffer: 10 * 1024 * 1024,
-          shell: false,
-        },
-        (err, stdout, stderr) => {
-          resolve({
-            stdout: stdout || '',
-            stderr: stderr || '',
-            exitCode: err ? ((err as any).code ?? 1) : 0,
-          });
-        },
-      );
-    });
+    let stdout = '';
+    let stderr = '';
+    let exitCode = 0;
 
-    // Update credentials file if gws refreshed the token
-    // (gws writes updated tokens back to the credentials file)
+    try {
+      const out = await execFileAsync(GWS_BIN, argv, {
+        timeout: GWS_TIMEOUT,
+        env: { ...process.env, GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: tmpFile },
+        maxBuffer: 10 * 1024 * 1024,
+        shell: false,
+      });
+      stdout = out.stdout || '';
+      stderr = out.stderr || '';
+    } catch (err: any) {
+      stdout = err.stdout || '';
+      stderr = err.stderr || '';
+      // timeout으로 강제 종료된 경우 exitCode 124 (Unix 관례)
+      exitCode = err.killed ? 124 : (err.code ?? 1);
+    }
+
+    // gws가 token을 갱신한 경우 credential 파일을 업데이트한다.
+    // (gws는 갱신된 token을 credentials 파일에 다시 씀)
+    // 주의: 그룹 채팅에서 여러 사용자가 동시에 요청을 보내면 token rotate 타이밍이
+    // 겹칠 경우 race condition이 발생할 수 있다. 현실적으로 확률이 낮고,
+    // 발생하더라도 재인증으로 해결 가능하다. 1대1 채팅에서는 발생하지 않는다.
     if (fs.existsSync(tmpFile)) {
       const tmpContent = fs.readFileSync(tmpFile, 'utf-8');
       const origContent = fs.readFileSync(credPath, 'utf-8');
@@ -224,7 +207,7 @@ async function handleGws(
       }
     }
 
-    jsonResponse(res, 200, result);
+    jsonResponse(res, 200, { stdout, stderr, exitCode });
   } finally {
     try {
       fs.unlinkSync(tmpFile);
@@ -239,24 +222,21 @@ async function handleAuthExchange(
   res: import('http').ServerResponse,
   secrets: Record<string, string>,
 ): Promise<void> {
-  const body = JSON.parse(await readBody(req));
-  const { code, groupFolder, token } = body;
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return jsonResponse(res, 400, { error: 'Invalid JSON' });
+  }
+  const { code } = body;
 
-  if (!code || !groupFolder) {
-    jsonResponse(res, 400, { error: 'Missing code or groupFolder' });
+  if (!code) {
+    jsonResponse(res, 400, { error: 'Missing code' });
     return;
   }
 
-  const tokenGroup = validateToken(token);
-  if (!tokenGroup || tokenGroup !== groupFolder) {
-    jsonResponse(res, 403, { error: 'Unauthorized' });
-    return;
-  }
-
-  if (!isValidGroupFolder(groupFolder)) {
-    jsonResponse(res, 400, { error: 'Invalid groupFolder' });
-    return;
-  }
+  const groupFolder = validateRequest(body, res);
+  if (!groupFolder) return;
 
   const clientId = secrets.GOOGLE_CLIENT_ID;
   const clientSecret = secrets.GOOGLE_CLIENT_SECRET;
@@ -307,24 +287,14 @@ async function handleAuthDisconnect(
   req: import('http').IncomingMessage,
   res: import('http').ServerResponse,
 ): Promise<void> {
-  const body = JSON.parse(await readBody(req));
-  const { groupFolder, token } = body;
-
-  const tokenGroup = validateToken(token);
-  if (!tokenGroup || tokenGroup !== groupFolder) {
-    jsonResponse(res, 403, { error: 'Unauthorized' });
-    return;
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return jsonResponse(res, 400, { error: 'Invalid JSON' });
   }
-
-  if (!groupFolder) {
-    jsonResponse(res, 400, { error: 'Missing groupFolder' });
-    return;
-  }
-
-  if (!isValidGroupFolder(groupFolder)) {
-    jsonResponse(res, 400, { error: 'Invalid groupFolder' });
-    return;
-  }
+  const groupFolder = validateRequest(body, res);
+  if (!groupFolder) return;
 
   const credPath = getCredentialsPath(groupFolder);
   let revokeResult = '';
@@ -357,24 +327,19 @@ async function handleAuthDisconnect(
   jsonResponse(res, 200, { success: true, revokeResult });
 }
 
-function handleAuthStatus(
+async function handleAuthStatus(
   req: import('http').IncomingMessage,
   res: import('http').ServerResponse,
-): void {
-  const url = new URL(req.url!, `http://${req.headers.host}`);
-  const groupFolder = url.searchParams.get('groupFolder') || '';
-  const token = url.searchParams.get('token') || '';
-
-  const tokenGroup = validateToken(token);
-  if (!tokenGroup || tokenGroup !== groupFolder) {
-    jsonResponse(res, 403, { error: 'Unauthorized' });
-    return;
+): Promise<void> {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return jsonResponse(res, 400, { error: 'Invalid JSON' });
   }
 
-  if (!groupFolder || !isValidGroupFolder(groupFolder)) {
-    jsonResponse(res, 400, { error: 'Invalid groupFolder' });
-    return;
-  }
+  const groupFolder = validateRequest(body, res);
+  if (!groupFolder) return;
 
   const connected = fs.existsSync(getCredentialsPath(groupFolder));
   jsonResponse(res, 200, { connected });

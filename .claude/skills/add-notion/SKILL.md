@@ -1,131 +1,60 @@
 ---
 name: add-notion
-description: Add Notion integration to NanoClaw. Set one API token in .env and all agents get Notion tools (search, read, create, update pages/databases). Triggers on "add notion", "notion 연동", "노션 연결", "notion integration".
+description: Add Notion integration to NanoClaw. Each group connects their own Notion workspace via chat. Credentials stay on the host — containers never see the real token. Triggers on "add notion", "notion 연동", "노션 연결", "notion integration".
 ---
 
 # Add Notion Integration
 
-This skill adds Notion as an MCP tool for all NanoClaw agents. One API token in `.env`, shared across all containers.
+컨테이너는 직접 Notion API를 호출하지 않는다. 호스트의 `notion-mcp-proxy`를 통해 모든 Notion 요청을 실행하므로, Notion API 토큰이 컨테이너에 노출되지 않는다.
+
+각 그룹이 채팅에서 `/connect-notion`으로 자신의 Notion 워크스페이스를 연결한다.
 
 ## Phase 1: Pre-flight
 
 ### Check if already applied
 
 ```bash
-grep -q 'NOTION_API_TOKEN' container/agent-runner/src/index.ts && echo "FOUND" || echo "NOT_FOUND"
+grep -q 'NOTION_MCP_URL' container/agent-runner/src/index.ts && echo "FOUND" || echo "NOT_FOUND"
 ```
 
-If `FOUND`, skip to Phase 3 (Setup).
+If `FOUND`, skip to Phase 3.
 
 ## Phase 2: Apply Code Changes
 
-### 2.1: Add Notion MCP server to agent-runner
+이미 적용되어 있음. 코드 변경 불필요.
 
-Edit `container/agent-runner/src/index.ts`:
-
-1. In `mcpServers`, add `notion` conditionally:
-
-```typescript
-...(process.env.NOTION_API_TOKEN ? {
-  notion: {
-    command: 'npx',
-    args: ['-y', '@notionhq/notion-mcp-server'],
-    env: {
-      OPENAPI_MCP_HEADERS: JSON.stringify({
-        Authorization: `Bearer ${process.env.NOTION_API_TOKEN}`,
-        'Notion-Version': '2022-06-28',
-      }),
-    },
-  },
-} : {}),
-```
-
-2. In `allowedTools`, add:
-
-```typescript
-...(process.env.NOTION_API_TOKEN ? ['mcp__notion__*'] : []),
-```
-
-### 2.2: Pass token to containers
-
-Edit `src/container-runner.ts` — in `buildContainerArgs()`, add after the OAuth/API key block:
-
-```typescript
-const notionToken = process.env.NOTION_API_TOKEN;
-if (notionToken) {
-  args.push('-e', `NOTION_API_TOKEN=${notionToken}`);
-}
-```
-
-### 2.3: Update .env.example
-
-Add `NOTION_API_TOKEN=` to `.env.example`.
-
-### 2.4: Copy updated agent-runner to existing groups
-
-```bash
-for dir in data/sessions/*/agent-runner-src; do
-  [ -d "$dir" ] && cp container/agent-runner/src/index.ts "$dir/"
-done
-```
-
-### 2.5: Validate
-
-```bash
-npm run build
-./container/build.sh
-```
+- `src/notion-mcp-proxy.ts` — 호스트 proxy 서버 (Notion MCP 서버 관리, credential 저장)
+- `container/notion-mcp-wrapper.js` — 컨테이너 내 stdio ↔ HTTP/SSE 브릿지
+- `src/container-runner.ts` — `NOTION_MCP_URL`, `NOTION_MCP_TOKEN` 컨테이너에 주입
+- `container/agent-runner/src/ipc-mcp-stdio.ts` — `notion_connect`, `notion_status`, `notion_disconnect` MCP 도구
+- `container/agent-runner/src/index.ts` — proxy 통신으로 Notion 연결 상태 확인
+- `container/skills/connect-notion/SKILL.md` — 사용자 연결 플로우
 
 ## Phase 3: Setup
 
-### Get Notion API Token
+별도 관리자 설정 불필요. NanoClaw가 실행 중이면 Notion proxy가 자동으로 시작된다.
 
-AskUserQuestion: Do you have a Notion API token?
-
-**If no**, guide them:
-
-> 1. https://www.notion.so/profile/integrations 접속
-> 2. **"New integration"** 클릭, 이름 입력 (예: "NanoClaw"), 워크스페이스 선택
-> 3. Capabilities: **Read content**, **Update content**, **Insert content** 활성화
-> 4. **Submit** 후 토큰 복사 (`ntn_` 또는 `secret_`로 시작)
->
-> **중요**: 접근할 페이지/데이터베이스에서 "..." → "Connections" → 통합 연결 필요
-
-### Configure
-
-`.env`에 추가:
+### Restart
 
 ```bash
-NOTION_API_TOKEN=ntn_your-token-here
-```
-
-### Build and restart
-
-```bash
-npm run build
 pm2 restart nanoclaw
 ```
 
-## Phase 4: Verify
+## Phase 4: User Flow
 
-> 아무 채팅에서 이렇게 보내보세요:
-> - "노션에서 회의록 검색해줘"
-> - "노션 데이터베이스 목록 보여줘"
+각 사용자가 채팅에서:
 
-### Check logs
+> "노션 연결해줘"
 
-```bash
-tail -f logs/nanoclaw.log | grep -iE "(notion|mcp)"
-```
+→ 에이전트가 `/connect-notion` 스킬 실행 → Notion Integration Token 입력 안내 → 사용자가 토큰 붙여넣기 → 호스트 proxy가 검증 후 저장 → 연결 완료
 
 ## Troubleshooting
 
-### Agent에 Notion 도구가 안 보임
+### Notion 도구 안 보임
 
-1. `.env`에 `NOTION_API_TOKEN` 설정 확인
-2. `container/agent-runner/src/index.ts`에 notion MCP 설정 확인
-3. 기존 그룹 agent-runner 복사: `for dir in data/sessions/*/agent-runner-src; do cp container/agent-runner/src/index.ts "$dir/"; done`
-4. `pm2 restart nanoclaw`
+1. `pm2 restart nanoclaw`
+2. 해당 그룹에서 `/connect-notion`으로 연결했는지 확인
+3. `data/notion-credentials/{group}.json` 파일 존재 확인
 
 ### Unauthorized 에러
 
@@ -139,8 +68,5 @@ tail -f logs/nanoclaw.log | grep -iE "(notion|mcp)"
 
 ## Removal
 
-1. `container/agent-runner/src/index.ts`에서 notion MCP 서버와 `mcp__notion__*` 제거
-2. `src/container-runner.ts`에서 `NOTION_API_TOKEN` 전달 제거
-3. `.env`에서 `NOTION_API_TOKEN` 제거
-4. `rm -r data/sessions/*/agent-runner-src 2>/dev/null || true`
-5. `npm run build && pm2 restart nanoclaw`
+1. `.env`에서 Notion 관련 설정 제거 (있는 경우)
+2. `pm2 restart nanoclaw`

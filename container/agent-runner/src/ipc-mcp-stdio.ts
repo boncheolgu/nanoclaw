@@ -10,6 +10,11 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
+import {
+  handleNotionConnect,
+  handleNotionStatus,
+  handleNotionDisconnect,
+} from './notion-handlers.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -335,31 +340,26 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 // --- Notion tools ---
 // Always available so any group can connect their own Notion workspace.
+// Credentials are managed by the host-side notion-mcp-proxy, never stored
+// in the container-mounted group folder.
 
-const NOTION_CREDENTIALS_PATH = '/workspace/group/.notion-credentials.json';
+const NOTION_MCP_URL = process.env.NOTION_MCP_URL;
+const NOTION_MCP_TOKEN = process.env.NOTION_MCP_TOKEN;
+const NOTION_GROUP_FOLDER = process.env.NANOCLAW_GROUP_FOLDER;
 
 server.tool(
   'notion_connect',
   'Connect a Notion workspace. Validates the token and saves credentials for this group.',
   { token: z.string().describe('Notion Internal Integration Token (starts with ntn_ or secret_)') },
   async (args) => {
-    try {
-      const res = await fetch('https://api.notion.com/v1/users/me', {
-        headers: {
-          Authorization: `Bearer ${args.token}`,
-          'Notion-Version': '2022-06-28',
-        },
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        return { content: [{ type: 'text' as const, text: `Invalid token: ${err}` }], isError: true };
-      }
-      const user = await res.json() as { name?: string; type?: string };
-      fs.writeFileSync(NOTION_CREDENTIALS_PATH, JSON.stringify({ token: args.token }, null, 2));
-      return { content: [{ type: 'text' as const, text: `Notion connected as ${user.name || 'unknown'} (${user.type || 'bot'}). Notion tools will be available on next message.` }] };
-    } catch (err) {
-      return { content: [{ type: 'text' as const, text: `Error: ${err}` }], isError: true };
+    if (!NOTION_MCP_URL || !NOTION_MCP_TOKEN || !NOTION_GROUP_FOLDER) {
+      return { content: [{ type: 'text' as const, text: 'Notion proxy not configured.' }], isError: true };
     }
+    return handleNotionConnect(args.token, {
+      notionMcpUrl: NOTION_MCP_URL,
+      notionMcpToken: NOTION_MCP_TOKEN,
+      groupFolder: NOTION_GROUP_FOLDER,
+    });
   },
 );
 
@@ -368,8 +368,14 @@ server.tool(
   'Check if Notion is connected for this group.',
   {},
   async () => {
-    const connected = fs.existsSync(NOTION_CREDENTIALS_PATH);
-    return { content: [{ type: 'text' as const, text: connected ? 'Connected.' : 'Not connected. Use /connect-notion to set up.' }] };
+    if (!NOTION_MCP_URL || !NOTION_MCP_TOKEN || !NOTION_GROUP_FOLDER) {
+      return { content: [{ type: 'text' as const, text: 'Notion proxy not configured.' }] };
+    }
+    return handleNotionStatus({
+      notionMcpUrl: NOTION_MCP_URL,
+      notionMcpToken: NOTION_MCP_TOKEN,
+      groupFolder: NOTION_GROUP_FOLDER,
+    });
   },
 );
 
@@ -378,8 +384,14 @@ server.tool(
   'Disconnect Notion. Deletes saved credentials for this group.',
   {},
   async () => {
-    try { fs.unlinkSync(NOTION_CREDENTIALS_PATH); } catch {}
-    return { content: [{ type: 'text' as const, text: 'Notion disconnected.' }] };
+    if (!NOTION_MCP_URL || !NOTION_MCP_TOKEN || !NOTION_GROUP_FOLDER) {
+      return { content: [{ type: 'text' as const, text: 'Notion proxy not configured.' }], isError: true };
+    }
+    return handleNotionDisconnect({
+      notionMcpUrl: NOTION_MCP_URL,
+      notionMcpToken: NOTION_MCP_TOKEN,
+      groupFolder: NOTION_GROUP_FOLDER,
+    });
   },
 );
 
@@ -407,6 +419,9 @@ if (process.env.GOOGLE_CLIENT_ID || GOOGLE_PROXY_URL) {
       }
       const params = new URLSearchParams({
         client_id: clientId,
+        // 포트 1은 의도적으로 아무것도 안 듣고 있음 — 브라우저가 에러 페이지로
+        // 이동하면서 멈추고, 주소창 URL에 인증 코드(?code=...)가 남아서
+        // 사용자가 복사해서 채팅에 붙여넣을 수 있음.
         redirect_uri: 'http://localhost:1',
         response_type: 'code',
         scope: GOOGLE_SCOPES,
@@ -451,7 +466,11 @@ if (process.env.GOOGLE_CLIENT_ID || GOOGLE_PROXY_URL) {
         return { content: [{ type: 'text' as const, text: 'Google proxy not configured.' }] };
       }
       try {
-        const res = await fetch(`${GOOGLE_PROXY_URL}/auth/status?groupFolder=${encodeURIComponent(groupFolder)}&token=${encodeURIComponent(GOOGLE_PROXY_TOKEN || '')}`);
+        const res = await fetch(`${GOOGLE_PROXY_URL}/auth/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupFolder, token: GOOGLE_PROXY_TOKEN }),
+        });
         const data = await res.json() as { connected: boolean };
         return { content: [{ type: 'text' as const, text: data.connected ? 'Connected.' : 'Not connected. Use /connect-google to authenticate.' }] };
       } catch {
