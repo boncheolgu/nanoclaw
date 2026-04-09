@@ -4,12 +4,17 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  GOOGLE_PROXY_PORT,
   IDLE_TIMEOUT,
+  NOTION_MCP_PORT,
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { startGoogleProxy } from './google-proxy.js';
+import { readEnvFile } from './env.js';
+import { startNotionMcpProxy } from './notion-mcp-proxy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -18,6 +23,7 @@ import {
 import {
   ContainerOutput,
   runContainerAgent,
+  setGoogleConfigured,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
@@ -483,10 +489,28 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start Google proxy only when GOOGLE_CLIENT_ID is configured.
+  // googleClientId is also passed to container-runner so containers only
+  // receive Google env vars when the proxy is actually running.
+  const googleClientId = readEnvFile(['GOOGLE_CLIENT_ID']).GOOGLE_CLIENT_ID || null;
+  setGoogleConfigured(googleClientId);
+  let googleProxyServer: import('http').Server | null = null;
+  if (googleClientId) {
+    googleProxyServer = await startGoogleProxy(GOOGLE_PROXY_PORT, PROXY_BIND_HOST);
+  }
+
+  // Start Notion MCP proxy (containers connect via notion-mcp-wrapper.js)
+  const notionMcpServer = await startNotionMcpProxy(
+    NOTION_MCP_PORT,
+    PROXY_BIND_HOST,
+  );
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    googleProxyServer?.close();
+    notionMcpServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);

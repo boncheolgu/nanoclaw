@@ -12,10 +12,18 @@ vi.mock('./config.js', () => ({
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
   CREDENTIAL_PROXY_PORT: 3001,
+  GOOGLE_PROXY_PORT: 3002,
+  NOTION_MCP_PORT: 3003,
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',
+}));
+
+// Mock proxy-server (token management shared by Google and Notion proxies)
+vi.mock('./proxy-server.js', () => ({
+  issueProxyToken: vi.fn(() => 'test-proxy-token'),
+  revokeProxyToken: vi.fn(),
 }));
 
 // Mock logger
@@ -86,7 +94,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import { runContainerAgent, setGoogleConfigured, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -115,6 +123,8 @@ describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
+    // Default: Google not configured
+    setGoogleConfigured(null);
   });
 
   afterEach(() => {
