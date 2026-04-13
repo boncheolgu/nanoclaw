@@ -7,7 +7,7 @@
  *   POST /gws           - Execute a gws CLI command
  *   POST /auth/exchange  - Exchange OAuth code for tokens
  *   POST /auth/disconnect - Revoke token and delete credentials
- *   GET  /auth/status    - Check if credentials exist for a group
+ *   POST /auth/status    - Check if credentials exist for a group
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
