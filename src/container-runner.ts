@@ -273,7 +273,11 @@ function buildVolumeMounts(
 
   // Mount notion-mcp-wrapper so the agent can use it as an MCP server command.
   // Mounted read-only to prevent the container from modifying it.
-  const wrapperPath = path.join(projectRoot, 'container', 'notion-mcp-wrapper.js');
+  const wrapperPath = path.join(
+    projectRoot,
+    'container',
+    'notion-mcp-wrapper.js',
+  );
   if (fs.existsSync(wrapperPath)) {
     mounts.push({
       hostPath: wrapperPath,
@@ -326,12 +330,18 @@ function buildContainerArgs(
   // the host-side Google proxy handles all operations that require it.
   if (googleClientId) {
     args.push('-e', `GOOGLE_CLIENT_ID=${googleClientId}`);
-    args.push('-e', `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`);
+    args.push(
+      '-e',
+      `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`,
+    );
     args.push('-e', `GOOGLE_PROXY_TOKEN=${proxyToken}`);
   }
 
   // Notion MCP proxy: always available, credentials stored on host.
-  args.push('-e', `NOTION_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${NOTION_MCP_PORT}`);
+  args.push(
+    '-e',
+    `NOTION_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${NOTION_MCP_PORT}`,
+  );
   args.push('-e', `NOTION_MCP_TOKEN=${proxyToken}`);
 
   // Runtime-specific args for host gateway resolution
@@ -475,7 +485,10 @@ export async function runContainerAgent(
             // so idle timers start even for "silent" query completions.
             outputQueue.push(parsed);
             processOutputQueue().catch((err) => {
-              logger.warn({ group: group.name, error: err }, 'Output queue processing error');
+              logger.warn(
+                { group: group.name, error: err },
+                'Output queue processing error',
+              );
             });
           } catch (err) {
             logger.warn(

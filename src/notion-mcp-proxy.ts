@@ -48,15 +48,9 @@ export function startNotionMcpProxy(
           await handleNotionConnect(req, res);
         } else if (req.method === 'POST' && req.url === '/notion/disconnect') {
           await handleNotionDisconnect(req, res);
-        } else if (
-          req.method === 'POST' &&
-          req.url === '/notion/status'
-        ) {
+        } else if (req.method === 'POST' && req.url === '/notion/status') {
           await handleNotionStatus(req, res);
-        } else if (
-          req.method === 'POST' &&
-          req.url === '/notion/mcp/sse'
-        ) {
+        } else if (req.method === 'POST' && req.url === '/notion/mcp/sse') {
           await handleMcpSse(req, res);
         } else if (
           req.method === 'POST' &&

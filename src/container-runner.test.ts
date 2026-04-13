@@ -94,7 +94,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, setGoogleConfigured, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  setGoogleConfigured,
+  ContainerOutput,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {

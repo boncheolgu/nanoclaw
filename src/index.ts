@@ -492,11 +492,15 @@ async function main(): Promise<void> {
   // Start Google proxy only when GOOGLE_CLIENT_ID is configured.
   // googleClientId is also passed to container-runner so containers only
   // receive Google env vars when the proxy is actually running.
-  const googleClientId = readEnvFile(['GOOGLE_CLIENT_ID']).GOOGLE_CLIENT_ID || null;
+  const googleClientId =
+    readEnvFile(['GOOGLE_CLIENT_ID']).GOOGLE_CLIENT_ID || null;
   setGoogleConfigured(googleClientId);
   let googleProxyServer: import('http').Server | null = null;
   if (googleClientId) {
-    googleProxyServer = await startGoogleProxy(GOOGLE_PROXY_PORT, PROXY_BIND_HOST);
+    googleProxyServer = await startGoogleProxy(
+      GOOGLE_PROXY_PORT,
+      PROXY_BIND_HOST,
+    );
   }
 
   // Start Notion MCP proxy (containers connect via notion-mcp-wrapper.js)

@@ -63,10 +63,7 @@ export function startGoogleProxy(
           await handleAuthExchange(req, res, secrets);
         } else if (req.method === 'POST' && req.url === '/auth/disconnect') {
           await handleAuthDisconnect(req, res);
-        } else if (
-          req.method === 'POST' &&
-          req.url === '/auth/status'
-        ) {
+        } else if (req.method === 'POST' && req.url === '/auth/status') {
           await handleAuthStatus(req, res);
         } else {
           jsonResponse(res, 404, { error: 'Not found' });
@@ -344,4 +341,3 @@ async function handleAuthStatus(
   const connected = fs.existsSync(getCredentialsPath(groupFolder));
   jsonResponse(res, 200, { connected });
 }
-
