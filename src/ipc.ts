@@ -76,9 +76,14 @@ export function startIpcWatcher(deps: IpcDeps): void {
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
-                if (
+                if (!targetGroup) {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'IPC message to unregistered group blocked',
+                  );
+                } else if (
                   isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
+                  targetGroup.folder === sourceGroup
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
                   logger.info(

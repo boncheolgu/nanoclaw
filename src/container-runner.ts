@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, execFile, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,7 +25,7 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
-  stopContainer,
+  stopContainerArgs,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { issueProxyToken, revokeProxyToken } from './proxy-server.js';
@@ -273,7 +273,11 @@ function buildVolumeMounts(
 
   // Mount notion-mcp-wrapper so the agent can use it as an MCP server command.
   // Mounted read-only to prevent the container from modifying it.
-  const wrapperPath = path.join(projectRoot, 'container', 'notion-mcp-wrapper.js');
+  const wrapperPath = path.join(
+    projectRoot,
+    'container',
+    'notion-mcp-wrapper.js',
+  );
   if (fs.existsSync(wrapperPath)) {
     mounts.push({
       hostPath: wrapperPath,
@@ -326,12 +330,18 @@ function buildContainerArgs(
   // the host-side Google proxy handles all operations that require it.
   if (googleClientId) {
     args.push('-e', `GOOGLE_CLIENT_ID=${googleClientId}`);
-    args.push('-e', `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`);
+    args.push(
+      '-e',
+      `GOOGLE_PROXY_URL=http://${CONTAINER_HOST_GATEWAY}:${GOOGLE_PROXY_PORT}`,
+    );
     args.push('-e', `GOOGLE_PROXY_TOKEN=${proxyToken}`);
   }
 
   // Notion MCP proxy: always available, credentials stored on host.
-  args.push('-e', `NOTION_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${NOTION_MCP_PORT}`);
+  args.push(
+    '-e',
+    `NOTION_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${NOTION_MCP_PORT}`,
+  );
   args.push('-e', `NOTION_MCP_TOKEN=${proxyToken}`);
 
   // Runtime-specific args for host gateway resolution
@@ -384,7 +394,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      argCount: containerArgs.length,
     },
     'Container mount configuration',
   );
@@ -475,7 +485,10 @@ export async function runContainerAgent(
             // so idle timers start even for "silent" query completions.
             outputQueue.push(parsed);
             processOutputQueue().catch((err) => {
-              logger.warn({ group: group.name, error: err }, 'Output queue processing error');
+              logger.warn(
+                { group: group.name, error: err },
+                'Output queue processing error',
+              );
             });
           } catch (err) {
             logger.warn(
@@ -522,7 +535,8 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
+      const [bin, ...stopArgs] = stopContainerArgs(containerName);
+      execFile(bin, stopArgs, { timeout: 15000 }, (err) => {
         if (err) {
           logger.warn(
             { group: group.name, containerName, err },
