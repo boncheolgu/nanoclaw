@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  afterAll,
+  vi,
+} from 'vitest';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -40,7 +48,9 @@ function createFakeMcpProcess() {
   proc.stdin = new PassThrough();
   proc.stdout = new PassThrough();
   proc.stderr = new PassThrough();
-  proc.kill = vi.fn(() => { proc.killed = true; });
+  proc.kill = vi.fn(() => {
+    proc.killed = true;
+  });
   proc.killed = false;
   return proc;
 }
@@ -48,7 +58,8 @@ function createFakeMcpProcess() {
 let fakeProc: ReturnType<typeof createFakeMcpProcess>;
 
 vi.mock('child_process', async () => {
-  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  const actual =
+    await vi.importActual<typeof import('child_process')>('child_process');
   return {
     ...actual,
     spawn: vi.fn(() => fakeProc),
@@ -70,7 +81,11 @@ function makeRequest(
   port: number,
   options: http.RequestOptions,
   body = '',
-): Promise<{ statusCode: number; body: string; headers: http.IncomingHttpHeaders }> {
+): Promise<{
+  statusCode: number;
+  body: string;
+  headers: http.IncomingHttpHeaders;
+}> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       { ...options, hostname: '127.0.0.1', port },
@@ -132,7 +147,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/connect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/connect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(400);
@@ -141,22 +160,41 @@ describe('notion-mcp-proxy', () => {
     it('token 불일치 시 403을 반환한다', async () => {
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/connect', headers: { 'content-type': 'application/json' } },
-        JSON.stringify({ token: 'ntn_test', groupFolder: 'testgroup', proxyToken: 'invalid' }),
+        {
+          method: 'POST',
+          path: '/notion/connect',
+          headers: { 'content-type': 'application/json' },
+        },
+        JSON.stringify({
+          token: 'ntn_test',
+          groupFolder: 'testgroup',
+          proxyToken: 'invalid',
+        }),
       );
       expect(res.statusCode).toBe(403);
     });
 
     it('Notion API가 실패하면 400을 반환한다', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: false,
-        text: async () => 'Unauthorized',
-      }));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          text: async () => 'Unauthorized',
+        }),
+      );
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/connect', headers: { 'content-type': 'application/json' } },
-        JSON.stringify({ token: 'ntn_invalid', groupFolder: 'testgroup', proxyToken }),
+        {
+          method: 'POST',
+          path: '/notion/connect',
+          headers: { 'content-type': 'application/json' },
+        },
+        JSON.stringify({
+          token: 'ntn_invalid',
+          groupFolder: 'testgroup',
+          proxyToken,
+        }),
       );
       expect(res.statusCode).toBe(400);
     });
@@ -170,8 +208,16 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/connect', headers: { 'content-type': 'application/json' } },
-        JSON.stringify({ token: 'ntn_valid', groupFolder: 'testgroup', proxyToken }),
+        {
+          method: 'POST',
+          path: '/notion/connect',
+          headers: { 'content-type': 'application/json' },
+        },
+        JSON.stringify({
+          token: 'ntn_valid',
+          groupFolder: 'testgroup',
+          proxyToken,
+        }),
       );
       expect(res.statusCode).toBe(200);
 
@@ -199,7 +245,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(200);
@@ -210,7 +260,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(200);
@@ -227,7 +281,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(200);
@@ -238,7 +296,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(200);
@@ -248,7 +310,11 @@ describe('notion-mcp-proxy', () => {
     it('token 불일치 시 403을 반환한다', async () => {
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken: 'invalid' }),
       );
       expect(res.statusCode).toBe(403);
@@ -261,7 +327,11 @@ describe('notion-mcp-proxy', () => {
       const proxyToken = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/notion/mcp/sse', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/notion/mcp/sse',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', proxyToken }),
       );
       expect(res.statusCode).toBe(400);
@@ -335,7 +405,9 @@ describe('notion-mcp-proxy', () => {
       // 서버에서 모든 연결 강제 종료 → res.on('close') 핸들러 발동
       (server as any).closeAllConnections?.();
       // kill 호출될 때까지 이벤트 기반 대기 (setTimeout(100) 제거)
-      await vi.waitFor(() => expect(fakeProc.kill).toHaveBeenCalled(), { timeout: 2000 });
+      await vi.waitFor(() => expect(fakeProc.kill).toHaveBeenCalled(), {
+        timeout: 2000,
+      });
     });
   });
 
@@ -399,7 +471,7 @@ describe('notion-mcp-proxy', () => {
           headers: {
             'content-type': 'application/json',
             'x-proxy-token': proxyToken,
-            'x-group-folder': 'group-b',  // 다른 그룹
+            'x-group-folder': 'group-b', // 다른 그룹
           },
         },
         JSON.stringify({ method: 'tools/list' }),

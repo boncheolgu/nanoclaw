@@ -115,7 +115,10 @@ async function handleNotionConnect(
   });
 
   if (!notionRes.ok) {
-    logger.warn({ groupFolder, status: notionRes.status }, 'Notion token validation failed');
+    logger.warn(
+      { groupFolder, status: notionRes.status },
+      'Notion token validation failed',
+    );
     jsonResponse(res, 400, { error: 'Invalid or expired Notion token' });
     return;
   }

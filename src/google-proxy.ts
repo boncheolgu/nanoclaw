@@ -262,7 +262,10 @@ async function handleAuthExchange(
 
   if (!tokenRes.ok) {
     const errText = await tokenRes.text();
-    logger.warn({ groupFolder, status: tokenRes.status }, 'Google token exchange failed');
+    logger.warn(
+      { groupFolder, status: tokenRes.status },
+      'Google token exchange failed',
+    );
     jsonResponse(res, 400, { error: 'Token exchange failed' });
     return;
   }

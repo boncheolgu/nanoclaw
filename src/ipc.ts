@@ -81,10 +81,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message to unregistered group blocked',
                   );
-                } else if (
-                  isMain ||
-                  targetGroup.folder === sourceGroup
-                ) {
+                } else if (isMain || targetGroup.folder === sourceGroup) {
                   await deps.sendMessage(data.chatJid, data.text);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },

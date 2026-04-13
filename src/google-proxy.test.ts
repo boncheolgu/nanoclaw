@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  afterAll,
+  vi,
+} from 'vitest';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -26,7 +34,9 @@ vi.mock('./env.js', () => ({
 }));
 
 vi.mock('./group-folder.js', () => ({
-  isValidGroupFolder: vi.fn((f: string) => /^[A-Za-z0-9_-]+$/.test(f) && f !== 'global'),
+  isValidGroupFolder: vi.fn(
+    (f: string) => /^[A-Za-z0-9_-]+$/.test(f) && f !== 'global',
+  ),
 }));
 
 vi.mock('./logger.js', () => ({
@@ -213,7 +223,9 @@ describe('google-proxy', () => {
         }),
       );
       const data = JSON.parse(res.body);
-      const stdoutLines = (data.stdout || '').split('\n').map((l: string) => l.trim());
+      const stdoutLines = (data.stdout || '')
+        .split('\n')
+        .map((l: string) => l.trim());
       expect(stdoutLines).not.toContain('pwned');
     });
 
@@ -244,7 +256,11 @@ describe('google-proxy', () => {
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/exchange', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/exchange',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(400);
@@ -253,21 +269,36 @@ describe('google-proxy', () => {
     it('token 불일치 시 403을 반환한다', async () => {
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/exchange', headers: { 'content-type': 'application/json' } },
-        JSON.stringify({ code: 'auth_code', groupFolder: 'testgroup', token: 'invalid' }),
+        {
+          method: 'POST',
+          path: '/auth/exchange',
+          headers: { 'content-type': 'application/json' },
+        },
+        JSON.stringify({
+          code: 'auth_code',
+          groupFolder: 'testgroup',
+          token: 'invalid',
+        }),
       );
       expect(res.statusCode).toBe(403);
     });
 
     it('Google token API 실패 시 400을 반환한다', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-        ok: false,
-        text: async () => 'invalid_grant',
-      }));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          text: async () => 'invalid_grant',
+        }),
+      );
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/exchange', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/exchange',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ code: 'bad_code', groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(400);
@@ -283,7 +314,11 @@ describe('google-proxy', () => {
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/exchange', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/exchange',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ code: 'valid_code', groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
@@ -315,7 +350,11 @@ describe('google-proxy', () => {
     it('token 불일치 시 403을 반환한다', async () => {
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token: 'invalid' }),
       );
       expect(res.statusCode).toBe(403);
@@ -324,16 +363,23 @@ describe('google-proxy', () => {
     it('credential 파일이 있으면 Google에 revoke 후 파일을 삭제한다', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
       const credFile = path.join(CRED_DIR, 'testgroup.json');
-      fs.writeFileSync(credFile, JSON.stringify({
-        refresh_token: 'rtoken_to_revoke',
-        client_id: 'test-client-id',
-        client_secret: 'test-client-secret',
-      }));
+      fs.writeFileSync(
+        credFile,
+        JSON.stringify({
+          refresh_token: 'rtoken_to_revoke',
+          client_id: 'test-client-id',
+          client_secret: 'test-client-secret',
+        }),
+      );
 
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
@@ -342,7 +388,7 @@ describe('google-proxy', () => {
       // Google revoke API가 올바른 token으로 호출됐는지 검증
       const fetchMock = vi.mocked(fetch);
       const revokeCall = fetchMock.mock.calls.find(([url]) =>
-        String(url).includes('revoke')
+        String(url).includes('revoke'),
       );
       expect(revokeCall).toBeDefined();
       expect(String(revokeCall![0])).toContain('rtoken_to_revoke');
@@ -352,21 +398,32 @@ describe('google-proxy', () => {
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
     });
 
     it('Google revoke 실패해도 파일은 삭제하고 200을 반환한다', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400 }));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: false, status: 400 }),
+      );
       const credFile = path.join(CRED_DIR, 'testgroup.json');
       fs.writeFileSync(credFile, JSON.stringify({ refresh_token: 'rtoken' }));
 
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/disconnect', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/disconnect',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
@@ -381,7 +438,11 @@ describe('google-proxy', () => {
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
@@ -392,7 +453,11 @@ describe('google-proxy', () => {
       const token = issueToken('testgroup');
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token }),
       );
       expect(res.statusCode).toBe(200);
@@ -402,7 +467,11 @@ describe('google-proxy', () => {
     it('token 불일치 시 403을 반환한다', async () => {
       const res = await makeRequest(
         port,
-        { method: 'POST', path: '/auth/status', headers: { 'content-type': 'application/json' } },
+        {
+          method: 'POST',
+          path: '/auth/status',
+          headers: { 'content-type': 'application/json' },
+        },
         JSON.stringify({ groupFolder: 'testgroup', token: 'invalid' }),
       );
       expect(res.statusCode).toBe(403);
