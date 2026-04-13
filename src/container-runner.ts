@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, execFile, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,7 +25,7 @@ import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
-  stopContainer,
+  stopContainerArgs,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { issueProxyToken, revokeProxyToken } from './proxy-server.js';
@@ -394,7 +394,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      argCount: containerArgs.length,
     },
     'Container mount configuration',
   );
@@ -535,7 +535,8 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
+      const [bin, ...stopArgs] = stopContainerArgs(containerName);
+      execFile(bin, stopArgs, { timeout: 15000 }, (err) => {
         if (err) {
           logger.warn(
             { group: group.name, containerName, err },

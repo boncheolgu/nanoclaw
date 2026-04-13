@@ -115,18 +115,23 @@ async function handleNotionConnect(
   });
 
   if (!notionRes.ok) {
-    const err = await notionRes.text();
-    jsonResponse(res, 400, { error: `Invalid Notion token: ${err}` });
+    logger.warn(
+      { groupFolder, status: notionRes.status },
+      'Notion token validation failed',
+    );
+    jsonResponse(res, 400, { error: 'Invalid or expired Notion token' });
     return;
   }
 
   const user = (await notionRes.json()) as { name?: string; type?: string };
 
   fs.mkdirSync(NOTION_CREDENTIALS_DIR, { recursive: true });
-  fs.writeFileSync(
-    getCredentialsPath(groupFolder),
-    JSON.stringify({ token }, null, 2),
-  );
+  const credFd = fs.openSync(getCredentialsPath(groupFolder), 'w', 0o600);
+  try {
+    fs.writeFileSync(credFd, JSON.stringify({ token }, null, 2));
+  } finally {
+    fs.closeSync(credFd);
+  }
 
   logger.info({ groupFolder }, 'Notion credentials saved via proxy');
   jsonResponse(res, 200, { success: true, name: user.name, type: user.type });

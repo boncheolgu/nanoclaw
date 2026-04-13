@@ -167,8 +167,12 @@ async function handleGws(
     os.tmpdir(),
     `gws-creds-${crypto.randomBytes(8).toString('hex')}.json`,
   );
-  fs.copyFileSync(credPath, tmpFile);
-  fs.chmodSync(tmpFile, 0o600);
+  const fd = fs.openSync(tmpFile, 'w', 0o600);
+  try {
+    fs.writeFileSync(fd, fs.readFileSync(credPath));
+  } finally {
+    fs.closeSync(fd);
+  }
 
   try {
     let stdout = '';
@@ -257,8 +261,12 @@ async function handleAuthExchange(
   });
 
   if (!tokenRes.ok) {
-    const err = await tokenRes.text();
-    jsonResponse(res, 400, { error: `Token exchange failed: ${err}` });
+    const errText = await tokenRes.text();
+    logger.warn(
+      { groupFolder, status: tokenRes.status },
+      'Google token exchange failed',
+    );
+    jsonResponse(res, 400, { error: 'Token exchange failed' });
     return;
   }
 
@@ -271,10 +279,12 @@ async function handleAuthExchange(
   };
 
   fs.mkdirSync(CREDENTIALS_DIR, { recursive: true });
-  fs.writeFileSync(
-    getCredentialsPath(groupFolder),
-    JSON.stringify(credentials, null, 2),
-  );
+  const credFd = fs.openSync(getCredentialsPath(groupFolder), 'w', 0o600);
+  try {
+    fs.writeFileSync(credFd, JSON.stringify(credentials, null, 2));
+  } finally {
+    fs.closeSync(credFd);
+  }
 
   logger.info({ groupFolder }, 'Google credentials saved via proxy');
   jsonResponse(res, 200, { success: true });
