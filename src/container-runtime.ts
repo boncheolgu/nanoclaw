@@ -2,7 +2,7 @@
  * Container runtime abstraction for NanoClaw.
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 
@@ -18,7 +18,9 @@ export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
  * Address the credential proxy binds to.
  * Docker Desktop (macOS): 127.0.0.1 — the VM routes host.docker.internal to loopback.
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
- *   falling back to 0.0.0.0 if the interface isn't found.
+ *   falling back to 127.0.0.1 if the interface isn't found.
+ *   0.0.0.0 is intentionally avoided — it would expose the proxy to all network
+ *   interfaces, making it reachable from outside the host machine.
  */
 export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
@@ -47,7 +49,9 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
-  return '0.0.0.0';
+  // Fallback to loopback — never bind to 0.0.0.0 which would expose the proxy
+  // to all network interfaces (including external ones).
+  return '127.0.0.1';
 }
 
 /** CLI args needed for the container to resolve the host gateway. */
@@ -67,9 +71,9 @@ export function readonlyMountArgs(
   return ['-v', `${hostPath}:${containerPath}:ro`];
 }
 
-/** Returns the shell command to stop a container by name. */
-export function stopContainer(name: string): string {
-  return `${CONTAINER_RUNTIME_BIN} stop ${name}`;
+/** Returns the args to stop a container by name (used with execFile). */
+export function stopContainerArgs(name: string): string[] {
+  return [CONTAINER_RUNTIME_BIN, 'stop', name];
 }
 
 /** Ensure the container runtime is running, starting it if needed. */
@@ -120,7 +124,8 @@ export function cleanupOrphans(): void {
     const orphans = output.trim().split('\n').filter(Boolean);
     for (const name of orphans) {
       try {
-        execSync(stopContainer(name), { stdio: 'pipe' });
+        const [bin, ...args] = stopContainerArgs(name);
+        execFileSync(bin, args, { stdio: 'pipe' });
       } catch {
         /* already stopped */
       }
