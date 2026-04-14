@@ -323,6 +323,26 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+export async function checkNotionStatus(
+  notionMcpUrl: string,
+  notionMcpToken: string,
+  groupFolder: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${notionMcpUrl}/notion/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupFolder, proxyToken: notionMcpToken }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json() as { connected: boolean };
+    return data.connected;
+  } catch {
+    log('Failed to check Notion status via proxy');
+    return false;
+  }
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -360,6 +380,16 @@ async function runQuery(
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
   setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
+
+  // Check if Notion is connected for this group via the host proxy.
+  // The proxy stores credentials outside the container-mounted path.
+  const notionMcpUrl = process.env.NOTION_MCP_URL;
+  const notionMcpToken = process.env.NOTION_MCP_TOKEN;
+  let notionConnected = false;
+  if (notionMcpUrl && notionMcpToken) {
+    notionConnected = await checkNotionStatus(notionMcpUrl, notionMcpToken, containerInput.groupFolder);
+    if (notionConnected) log('Notion connected for this group');
+  }
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
@@ -407,7 +437,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        ...(notionConnected ? ['mcp__notion__*'] : []),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +454,19 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(notionConnected && notionMcpUrl && notionMcpToken ? {
+          notion: {
+            command: 'node',
+            args: ['/notion-mcp-wrapper.js'],
+            env: {
+              NOTION_MCP_URL: notionMcpUrl,
+              NOTION_MCP_TOKEN: notionMcpToken,
+              GROUP_FOLDER: containerInput.groupFolder,
+            },
+          },
+        } : {}),
+        // Google: gws CLI is available via Bash (no MCP server needed).
+        // Agent runs gws commands directly (e.g., gws gmail +triage).
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
