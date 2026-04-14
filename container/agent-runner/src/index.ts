@@ -323,6 +323,26 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+export async function checkNotionStatus(
+  notionMcpUrl: string,
+  notionMcpToken: string,
+  groupFolder: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${notionMcpUrl}/notion/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupFolder, proxyToken: notionMcpToken }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json() as { connected: boolean };
+    return data.connected;
+  } catch {
+    log('Failed to check Notion status via proxy');
+    return false;
+  }
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -367,20 +387,8 @@ async function runQuery(
   const notionMcpToken = process.env.NOTION_MCP_TOKEN;
   let notionConnected = false;
   if (notionMcpUrl && notionMcpToken) {
-    try {
-      const params = new URLSearchParams({
-        groupFolder: containerInput.groupFolder,
-        token: notionMcpToken,
-      });
-      const statusRes = await fetch(`${notionMcpUrl}/notion/status?${params}`);
-      if (statusRes.ok) {
-        const data = await statusRes.json() as { connected: boolean };
-        notionConnected = data.connected;
-        if (notionConnected) log('Notion connected for this group');
-      }
-    } catch {
-      log('Failed to check Notion status via proxy');
-    }
+    notionConnected = await checkNotionStatus(notionMcpUrl, notionMcpToken, containerInput.groupFolder);
+    if (notionConnected) log('Notion connected for this group');
   }
 
   let newSessionId: string | undefined;

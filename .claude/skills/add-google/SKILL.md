@@ -25,7 +25,7 @@ If `FOUND`, skip to Phase 3 to verify setup.
 - `src/container-runner.ts` — `GOOGLE_CLIENT_ID`, `GOOGLE_PROXY_URL`, `GOOGLE_PROXY_TOKEN` 컨테이너에 주입
 - `container/agent-runner/src/ipc-mcp-stdio.ts` — `google_auth_url`, `google_auth_exchange`, `google_auth_status`, `google_disconnect`, `google_run` MCP 도구
 - `container/skills/connect-google/SKILL.md` — 사용자 연결 플로우
-- `container/Dockerfile` — `@googleworkspace/cli` 설치 (호스트 proxy가 사용)
+- `package.json` — `@googleworkspace/cli` 설치 (호스트 proxy가 사용, 컨테이너 아님)
 
 ## Phase 3: Setup (Admin — 1회)
 

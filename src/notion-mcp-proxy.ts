@@ -7,8 +7,8 @@
  * Endpoints:
  *   POST /notion/connect     - Validate and save Notion API token for a group
  *   POST /notion/disconnect  - Delete credentials for a group
- *   GET  /notion/status      - Check if credentials exist for a group
- *   GET  /notion/mcp/sse     - SSE stream: MCP server stdout → wrapper stdin
+ *   POST  /notion/status      - Check if credentials exist for a group
+ *   POST  /notion/mcp/sse     - SSE stream: MCP server stdout → wrapper stdin
  *   POST /notion/mcp/message - Send message: wrapper stdout → MCP server stdin
  */
 import { ChildProcess, spawn } from 'child_process';
